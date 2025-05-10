@@ -5,6 +5,8 @@ from transformers import BertModel
 from sklearn.metrics import classification_report, accuracy_score, f1_score
 import numpy as np
 from tqdm import tqdm
+import re
+from collections import defaultdict
  
 
 
@@ -17,7 +19,11 @@ class EnhancedBertForIdiomDetection(nn.Module):
                  lstm_dropout=0.3,
                  hidden_dropout=0.3,
                  use_layer_norm=True,
-                 freeze_bert_layers=0):  # Number of BERT layers to freeze
+                 freeze_bert_layers=0,
+                 use_char_embeddings=True,  # New: character-level embeddings
+                 use_pos_embeddings=True,   # New: POS tag embeddings
+                 char_embedding_dim=32,     # New: dimension for char embeddings
+                 pos_embedding_dim=32):     # New: dimension for POS embeddings
         super(EnhancedBertForIdiomDetection, self).__init__()
         
         # Pre-trained BERT model
@@ -31,9 +37,31 @@ class EnhancedBertForIdiomDetection(nn.Module):
                 for param in module.parameters():
                     param.requires_grad = False
         
+        # Character-level embeddings (if enabled)
+        self.use_char_embeddings = use_char_embeddings
+        if use_char_embeddings:
+            self.char_embeddings = nn.Embedding(128, char_embedding_dim)  # ASCII characters
+            self.char_cnn = nn.Sequential(
+                nn.Conv1d(char_embedding_dim, char_embedding_dim, kernel_size=3, padding=1),
+                nn.ReLU(),
+                nn.MaxPool1d(2)
+            )
+        
+        # POS tag embeddings (if enabled)
+        self.use_pos_embeddings = use_pos_embeddings
+        if use_pos_embeddings:
+            self.pos_embeddings = nn.Embedding(50, pos_embedding_dim)  # Assuming max 50 POS tags
+        
+        # Calculate input size for LSTM
+        lstm_input_size = self.bert.config.hidden_size
+        if use_char_embeddings:
+            lstm_input_size += char_embedding_dim
+        if use_pos_embeddings:
+            lstm_input_size += pos_embedding_dim
+        
         # Add a BiLSTM layer to capture context
         self.lstm = nn.LSTM(
-            input_size=self.bert.config.hidden_size,
+            input_size=lstm_input_size,
             hidden_size=lstm_hidden_size,
             num_layers=lstm_layers,
             batch_first=True,
@@ -44,7 +72,7 @@ class EnhancedBertForIdiomDetection(nn.Module):
         # Classification layers
         self.dropout = nn.Dropout(hidden_dropout)
         self.dense = nn.Linear(lstm_hidden_size*2, lstm_hidden_size)
-        self.activation = nn.ReLU()
+        self.activation = nn.GELU()  # Changed from ReLU to GELU
         self.use_layer_norm = use_layer_norm
         if use_layer_norm:
             self.norm = nn.LayerNorm(lstm_hidden_size)
@@ -53,7 +81,28 @@ class EnhancedBertForIdiomDetection(nn.Module):
         # CRF layer
         self.crf = CRF(num_labels, batch_first=True)
         
-    def forward(self, input_ids, attention_mask, labels=None):
+        # MWE frequency dictionary (for post-processing)
+        self.mwe_freq = defaultdict(int)
+        
+    def get_char_embeddings(self, tokens):
+        """Convert tokens to character-level embeddings"""
+        batch_size = len(tokens)
+        max_word_len = max(len(token) for token in tokens)
+        char_ids = torch.zeros(batch_size, max_word_len, dtype=torch.long)
+        
+        for i, token in enumerate(tokens):
+            for j, char in enumerate(token):
+                if j < max_word_len:
+                    char_ids[i, j] = ord(char)
+        
+        char_embeds = self.char_embeddings(char_ids)
+        char_embeds = char_embeds.transpose(1, 2)  # [batch, char_dim, seq_len]
+        char_embeds = self.char_cnn(char_embeds)
+        char_embeds = char_embeds.transpose(1, 2)  # [batch, seq_len, char_dim]
+        
+        return char_embeds
+    
+    def forward(self, input_ids, attention_mask, labels=None, pos_tags=None):
         # BERT outputs
         outputs = self.bert(
             input_ids=input_ids,
@@ -61,6 +110,23 @@ class EnhancedBertForIdiomDetection(nn.Module):
         )
         
         sequence_output = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
+        
+        # Get additional features
+        batch_size, seq_len, _ = sequence_output.size()
+        additional_features = []
+        
+        if self.use_char_embeddings:
+            tokens = [self.tokenizer.convert_ids_to_tokens(ids) for ids in input_ids]
+            char_embeds = self.get_char_embeddings(tokens)
+            additional_features.append(char_embeds)
+        
+        if self.use_pos_embeddings and pos_tags is not None:
+            pos_embeds = self.pos_embeddings(pos_tags)
+            additional_features.append(pos_embeds)
+        
+        # Concatenate additional features
+        if additional_features:
+            sequence_output = torch.cat([sequence_output] + additional_features, dim=-1)
         
         # BiLSTM
         lstm_output, _ = self.lstm(sequence_output)
@@ -91,6 +157,140 @@ class EnhancedBertForIdiomDetection(nn.Module):
             'logits': emissions,
             'predictions': pred_tensor
         }
+
+def preprocess_text(text):
+    """Enhanced text preprocessing"""
+    # Convert to lowercase
+    text = text.lower()
+    
+    # Remove extra whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    # Handle special characters
+    text = re.sub(r'[^\w\s]', ' ', text)
+    
+    # Handle numbers
+    text = re.sub(r'\d+', 'NUM', text)
+    
+    return text
+
+def post_process_bio_tags(tokens, tags, token_is_first_subword, mwe_freq=None):
+    """
+    Enhanced post-processing of BIO tags with additional rules
+    """
+    corrected_tags = tags.copy()
+    
+    # Rule 1: Fix I-IDIOM without preceding B-IDIOM
+    for i in range(len(tags)):
+        if not token_is_first_subword[i]:
+            continue
+            
+        if i > 0 and tags[i] == 2 and tags[i-1] == 0:
+            if i < len(tags)-1 and tags[i+1] == 2:
+                corrected_tags[i] = 1
+            else:
+                corrected_tags[i] = 0
+    
+    # Rule 2: Fix consecutive B-IDIOM tags
+    for i in range(len(tags)-1):
+        if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
+            continue
+            
+        if tags[i] == 1 and tags[i+1] == 1:
+            corrected_tags[i+1] = 2
+    
+    # Rule 3: Handle very short MWEs (1-2 tokens)
+    if mwe_freq is not None:
+        for i in range(len(tags)-1):
+            if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
+                continue
+                
+            if tags[i] == 1 and tags[i+1] == 0:
+                # Check if this single-token MWE is common
+                mwe = tokens[i]
+                if mwe_freq[mwe] < 2:  # Threshold for frequency
+                    corrected_tags[i] = 0
+    
+    # Rule 4: Fix broken MWEs
+    for i in range(len(tags)-2):
+        if not all(token_is_first_subword[j] for j in range(i, i+3)):
+            continue
+            
+        if tags[i] == 1 and tags[i+1] == 0 and tags[i+2] == 2:
+            # Likely a broken MWE, fix middle token
+            corrected_tags[i+1] = 2
+    
+    # Rule 5: Handle common MWE patterns
+    for i in range(len(tags)-1):
+        if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
+            continue
+            
+        # Check for common MWE patterns (e.g., "take into account")
+        if tokens[i].lower() in ['take', 'make', 'put', 'get'] and tokens[i+1].lower() in ['into', 'up', 'down', 'out']:
+            if tags[i] == 0 and tags[i+1] == 0:
+                corrected_tags[i] = 1
+                corrected_tags[i+1] = 2
+    
+    return corrected_tags
+
+def apply_post_processing(model, tokenizer, input_ids, attention_mask, device, mwe_freq=None):
+    """Enhanced post-processing with MWE frequency information"""
+    with torch.no_grad():
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    preds = outputs['predictions'][0]
+    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
+    masks = attention_mask[0]
+    
+    # Identify which tokens are first subwords
+    token_is_first_subword = [not token.startswith('##') for token in tokens]
+    
+    # Apply enhanced post-processing
+    corrected_preds = post_process_bio_tags(tokens, preds.tolist(), token_is_first_subword, mwe_freq)
+    
+    # Map back to tensor
+    corrected_tensor = torch.tensor(corrected_preds, device=preds.device)
+    
+    return corrected_tensor, tokens, masks
+
+def update_mwe_frequency(model, train_loader, tokenizer):
+    """Update MWE frequency dictionary from training data"""
+    model.eval()
+    mwe_freq = defaultdict(int)
+    
+    with torch.no_grad():
+        for batch in train_loader:
+            input_ids = batch['input_ids']
+            attention_mask = batch['attention_mask']
+            labels = batch['labels']
+            
+            # Get predictions
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            preds = outputs['predictions']
+            
+            # Process each sequence
+            for seq_preds, seq_mask, seq_labels, seq_ids in zip(preds, attention_mask, labels, input_ids):
+                tokens = tokenizer.convert_ids_to_tokens(seq_ids)
+                current_mwe = []
+                
+                for token, mask, pred in zip(tokens, seq_mask, seq_preds):
+                    if mask == 0 or token in ['[CLS]', '[SEP]', '[PAD]']:
+                        continue
+                        
+                    if not token.startswith('##'):
+                        if current_mwe:
+                            mwe_freq[' '.join(current_mwe)] += 1
+                            current_mwe = []
+                        
+                        if pred.item() in [1, 2]:  # B-IDIOM or I-IDIOM
+                            current_mwe.append(token)
+                    elif current_mwe:
+                        current_mwe[-1] += token[2:]
+                
+                if current_mwe:
+                    mwe_freq[' '.join(current_mwe)] += 1
+    
+    return mwe_freq
 
 def evaluate(model, val_loader, tokenizer, device):
     model.eval()
@@ -345,77 +545,6 @@ def train_model(train_loader, val_loader, tokenizer, model=None, epochs=10, lr=2
     # Load the best model weights
     model.load_state_dict(torch.load("best_idiom_model.pt"))
     return model
-
-def post_process_bio_tags(tokens, tags, token_is_first_subword):
-    """
-    Apply linguistic rules to fix common errors in BIO tag sequences
-    
-    Parameters:
-    - tokens: List of tokens (including subtokens)
-    - tags: Predicted BIO tags (0=O, 1=B-IDIOM, 2=I-IDIOM)
-    - token_is_first_subword: Boolean list indicating if a token is the first subword of a word
-    
-    Returns:
-    - Corrected BIO tags
-    """
-    corrected_tags = tags.copy()
-    
-    # Rule 1: Fix I-IDIOM without preceding B-IDIOM
-    for i in range(len(tags)):
-        if not token_is_first_subword[i]:
-            continue  # Skip subtokens
-            
-        if i > 0 and tags[i] == 2 and tags[i-1] == 0:  # I-IDIOM after O
-            # Either correct to B-IDIOM or O
-            if i < len(tags)-1 and tags[i+1] == 2:  # If followed by I-IDIOM
-                corrected_tags[i] = 1  # Convert to B-IDIOM
-            else:
-                corrected_tags[i] = 0  # Convert to O if isolated
-    
-    # Rule 2: Fix B-IDIOM followed by O (when it should likely be followed by I-IDIOM)
-    for i in range(len(tags)-1):
-        if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
-            continue  # Skip subtokens
-            
-        if tags[i] == 1 and tags[i+1] == 0:  # B-IDIOM followed by O
-            # Check if this is likely part of a longer expression
-            # For now, keep as is (could be a single-token MWE)
-            pass
-    
-    # Rule 3: Fix consecutive B-IDIOM tags (should usually be B-IDIOM followed by I-IDIOM)
-    for i in range(len(tags)-1):
-        if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
-            continue  # Skip subtokens
-            
-        if tags[i] == 1 and tags[i+1] == 1:  # B-IDIOM followed by B-IDIOM
-            corrected_tags[i+1] = 2  # Convert second to I-IDIOM
-    
-    # Rule 4: Handle very short MWEs (could be false positives)
-    # This requires more context and depends on your specific data
-    
-    return corrected_tags
-
-def apply_post_processing(model, tokenizer, input_ids, attention_mask, device):
-    """Apply model prediction and post-processing to input sequence"""
-    # Get model predictions
-    with torch.no_grad():
-        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-    
-    preds = outputs['predictions'][0]
-    tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
-    masks = attention_mask[0]
-    
-    # Identify which tokens are first subwords
-    token_is_first_subword = [not token.startswith('##') for token in tokens]
-    
-    # Apply post-processing
-    corrected_preds = post_process_bio_tags(tokens, preds.tolist(), token_is_first_subword)
-    
-    # Map back to tensor
-    corrected_tensor = torch.tensor(corrected_preds, device=preds.device)
-    
-    return corrected_tensor, tokens, masks
-
 
 def predict_idioms_with_postprocessing(model, tokenizer, sentence, device):
     model.eval()
