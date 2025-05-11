@@ -1,40 +1,31 @@
 import torch
 import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer
+from transformers import T5Model, T5Tokenizer
 from torchcrf import CRF
 import numpy as np
 from tqdm import tqdm
 
 class MWEMaskedAttentionModel(nn.Module):
     def __init__(self, 
-                 model_name="xlm-roberta-base",
+                 model_name="t5-base",
                  num_labels=3,
                  hidden_size=768,
                  num_attention_heads=8,
                  attention_dropout=0.2,
                  hidden_dropout=0.4,
-                 freeze_bert_layers=6,
-                 mlm_probability=0.15):
+                 freeze_bert_layers=6):
         super(MWEMaskedAttentionModel, self).__init__()
         
-        # Base transformer model (XLM-RoBERTa)
-        self.transformer = AutoModel.from_pretrained(model_name)
+        # Base transformer model (T5)
+        self.transformer = T5Model.from_pretrained(model_name)
         
         # Freeze specified number of transformer layers
         if freeze_bert_layers > 0:
-            modules = [self.transformer.embeddings]
-            modules.extend(self.transformer.encoder.layer[:freeze_bert_layers])
+            modules = [self.transformer.shared]
+            modules.extend(self.transformer.encoder.block[:freeze_bert_layers])
             for module in modules:
                 for param in module.parameters():
                     param.requires_grad = False
-        
-        # MLM head for masked language modeling
-        self.mlm_head = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.GELU(),
-            nn.Linear(hidden_size, self.transformer.config.vocab_size)
-        )
         
         # Multi-head attention for MWE detection
         self.mwe_attention = nn.MultiheadAttention(
@@ -62,52 +53,19 @@ class MWEMaskedAttentionModel(nn.Module):
         
         # CRF layer for sequence labeling
         self.crf = CRF(num_labels, batch_first=True)
-        
-        # MLM probability
-        self.mlm_probability = mlm_probability
-        
-    def get_mlm_mask(self, input_ids, attention_mask):
-        """Generate mask for MLM training"""
-        mask = torch.zeros_like(input_ids, dtype=torch.bool)
-        for i in range(input_ids.size(0)):
-            # Get indices of tokens that can be masked (not special tokens)
-            valid_indices = torch.where(
-                (input_ids[i] != self.transformer.config.pad_token_id) &
-                (input_ids[i] != self.transformer.config.cls_token_id) &
-                (input_ids[i] != self.transformer.config.sep_token_id)
-            )[0]
-            
-            # Randomly select tokens to mask
-            num_tokens_to_mask = int(len(valid_indices) * self.mlm_probability)
-            if num_tokens_to_mask > 0:
-                indices_to_mask = valid_indices[torch.randperm(len(valid_indices))[:num_tokens_to_mask]]
-                mask[i, indices_to_mask] = True
-        
-        return mask
     
     def forward(self, input_ids, attention_mask, labels=None):
         # Get transformer outputs
         outputs = self.transformer(
             input_ids=input_ids,
-            attention_mask=attention_mask
+            attention_mask=attention_mask,
+            decoder_input_ids=input_ids
         )
         
         sequence_output = outputs.last_hidden_state
         
-        # Generate MLM mask
-        mlm_mask = self.get_mlm_mask(input_ids, attention_mask)
-        
-        # MLM loss
-        mlm_loss = None
-        if labels is not None:
-            mlm_logits = self.mlm_head(sequence_output)
-            mlm_loss = nn.CrossEntropyLoss()(
-                mlm_logits[mlm_mask].view(-1, self.transformer.config.vocab_size),
-                input_ids[mlm_mask].view(-1)
-            )
-        
         # Apply multi-head attention
-        attn_output, _ = self.mwe_attention(
+        attn_output, attn_weights = self.mwe_attention(
             sequence_output,
             sequence_output,
             sequence_output,
@@ -130,11 +88,6 @@ class MWEMaskedAttentionModel(nn.Module):
             crf_mask = attention_mask.bool()
             crf_loss = -self.crf(emissions, labels, mask=crf_mask, reduction='mean')
         
-        # Combine losses if training
-        loss = None
-        if labels is not None:
-            loss = crf_loss + 0.1 * mlm_loss  # Weight MLM loss less than CRF loss
-        
         predictions = self.crf.decode(emissions, mask=attention_mask.bool())
         max_len = emissions.size(1)
         pred_tensor = torch.zeros_like(input_ids)
@@ -142,11 +95,10 @@ class MWEMaskedAttentionModel(nn.Module):
             pred_tensor[i, :len(pred_seq)] = torch.tensor(pred_seq, device=pred_tensor.device)
         
         return {
-            'loss': loss,
+            'loss': crf_loss,
             'logits': emissions,
             'predictions': pred_tensor,
-            'mlm_loss': mlm_loss,
-            'crf_loss': crf_loss
+            'attention_weights': attn_weights
         }
 
 def train_model(model, train_loader, val_loader, tokenizer, 
@@ -206,8 +158,6 @@ def train_model(model, train_loader, val_loader, tokenizer,
     for epoch in range(epochs):
         model.train()
         total_loss = 0
-        total_mlm_loss = 0
-        total_crf_loss = 0
         
         for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}"):
             if batch['input_ids'].size(0) == 0:
@@ -224,8 +174,6 @@ def train_model(model, train_loader, val_loader, tokenizer,
             )
             
             loss = outputs['loss']
-            mlm_loss = outputs['mlm_loss']
-            crf_loss = outputs['crf_loss']
             
             loss.backward()
             optimizer.step()
@@ -233,18 +181,9 @@ def train_model(model, train_loader, val_loader, tokenizer,
             optimizer.zero_grad()
             
             total_loss += loss.item()
-            if mlm_loss is not None:
-                total_mlm_loss += mlm_loss.item()
-            if crf_loss is not None:
-                total_crf_loss += crf_loss.item()
         
         avg_loss = total_loss / len(train_loader)
-        avg_mlm_loss = total_mlm_loss / len(train_loader)
-        avg_crf_loss = total_crf_loss / len(train_loader)
-        
         print(f"\nEpoch {epoch+1} Training Loss: {avg_loss:.4f}")
-        print(f"MLM Loss: {avg_mlm_loss:.4f}")
-        print(f"CRF Loss: {avg_crf_loss:.4f}")
         
         # Validation
         model.eval()
@@ -369,6 +308,7 @@ def predict_mwe(model, tokenizer, sentence, device, max_length=128):
     with torch.no_grad():
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
         predictions = outputs['predictions']
+        attention_weights = outputs['attention_weights']
     
     # Convert predictions to tokens and their labels
     tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
@@ -381,20 +321,20 @@ def predict_mwe(model, tokenizer, sentence, device, max_length=128):
     current_label = None
     
     for token, pred in zip(tokens, preds):
-        if token in ['[CLS]', '[SEP]', '[PAD]']:
+        if token in ['<pad>', '<s>', '</s>']:
             continue
             
-        if not token.startswith('##'):
+        if not token.startswith('▁'):
             if current_word:
                 words.append(''.join(current_word))
                 word_labels.append(current_label)
             current_word = [token]
             current_label = pred
         else:
-            current_word.append(token[2:])
+            current_word.append(token[1:])
     
     if current_word:
         words.append(''.join(current_word))
         word_labels.append(current_label)
     
-    return words, word_labels
+    return words, word_labels, attention_weights
