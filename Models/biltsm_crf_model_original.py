@@ -81,9 +81,6 @@ class EnhancedBertForIdiomDetection(nn.Module):
         # CRF layer
         self.crf = CRF(num_labels, batch_first=True)
         
-        # MWE frequency dictionary (for post-processing)
-        self.mwe_freq = defaultdict(int)
-        
     def get_char_embeddings(self, tokens):
         """Convert tokens to character-level embeddings"""
         batch_size = len(tokens)
@@ -174,7 +171,7 @@ def preprocess_text(text):
     
     return text
 
-def post_process_bio_tags(tokens, tags, token_is_first_subword, mwe_freq=None):
+def post_process_bio_tags(tokens, tags, token_is_first_subword):
     """
     Enhanced post-processing of BIO tags with additional rules
     """
@@ -199,18 +196,6 @@ def post_process_bio_tags(tokens, tags, token_is_first_subword, mwe_freq=None):
         if tags[i] == 1 and tags[i+1] == 1:
             corrected_tags[i+1] = 2
     
-    # Rule 3: Handle very short MWEs (1-2 tokens)
-    if mwe_freq is not None:
-        for i in range(len(tags)-1):
-            if not token_is_first_subword[i] or not token_is_first_subword[i+1]:
-                continue
-                
-            if tags[i] == 1 and tags[i+1] == 0:
-                # Check if this single-token MWE is common
-                mwe = tokens[i]
-                if mwe_freq[mwe] < 2:  # Threshold for frequency
-                    corrected_tags[i] = 0
-    
     # Rule 4: Fix broken MWEs
     for i in range(len(tags)-2):
         if not all(token_is_first_subword[j] for j in range(i, i+3)):
@@ -233,8 +218,8 @@ def post_process_bio_tags(tokens, tags, token_is_first_subword, mwe_freq=None):
     
     return corrected_tags
 
-def apply_post_processing(model, tokenizer, input_ids, attention_mask, device, mwe_freq=None):
-    """Enhanced post-processing with MWE frequency information"""
+def apply_post_processing(model, tokenizer, input_ids, attention_mask, device):
+    """Enhanced post-processing"""
     with torch.no_grad():
         outputs = model(input_ids=input_ids, attention_mask=attention_mask)
     
@@ -246,51 +231,12 @@ def apply_post_processing(model, tokenizer, input_ids, attention_mask, device, m
     token_is_first_subword = [not token.startswith('##') for token in tokens]
     
     # Apply enhanced post-processing
-    corrected_preds = post_process_bio_tags(tokens, preds.tolist(), token_is_first_subword, mwe_freq)
+    corrected_preds = post_process_bio_tags(tokens, preds.tolist(), token_is_first_subword)
     
     # Map back to tensor
     corrected_tensor = torch.tensor(corrected_preds, device=preds.device)
     
     return corrected_tensor, tokens, masks
-
-def update_mwe_frequency(model, train_loader, tokenizer):
-    """Update MWE frequency dictionary from training data"""
-    model.eval()
-    mwe_freq = defaultdict(int)
-    
-    with torch.no_grad():
-        for batch in train_loader:
-            input_ids = batch['input_ids']
-            attention_mask = batch['attention_mask']
-            labels = batch['labels']
-            
-            # Get predictions
-            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
-            preds = outputs['predictions']
-            
-            # Process each sequence
-            for seq_preds, seq_mask, seq_labels, seq_ids in zip(preds, attention_mask, labels, input_ids):
-                tokens = tokenizer.convert_ids_to_tokens(seq_ids)
-                current_mwe = []
-                
-                for token, mask, pred in zip(tokens, seq_mask, seq_preds):
-                    if mask == 0 or token in ['[CLS]', '[SEP]', '[PAD]']:
-                        continue
-                        
-                    if not token.startswith('##'):
-                        if current_mwe:
-                            mwe_freq[' '.join(current_mwe)] += 1
-                            current_mwe = []
-                        
-                        if pred.item() in [1, 2]:  # B-IDIOM or I-IDIOM
-                            current_mwe.append(token)
-                    elif current_mwe:
-                        current_mwe[-1] += token[2:]
-                
-                if current_mwe:
-                    mwe_freq[' '.join(current_mwe)] += 1
-    
-    return mwe_freq
 
 def evaluate(model, val_loader, tokenizer, device):
     model.eval()
