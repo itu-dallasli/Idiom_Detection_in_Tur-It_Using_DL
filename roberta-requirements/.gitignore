@@ -1,0 +1,59 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Model weights and large files
+Models/saved_models/
+*.pt
+*.bin
+*.h5
+*.ckpt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_metadata
+
+# Distribution / packaging
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Logs and results
+*.log
+*.csv
+results/
+Models/results/
+lightning_logs/
+*.log
+*.out
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db 
