@@ -11,6 +11,8 @@ This repository contains a machine learning and deep learning hybrid project foc
 ├── 📂 Models/                 # Model implementations and saved models
 │   ├── 📂 Transformer/    # Transformer
 │   ├── 📂 Latest_BiLSTM-CRF/  # BiLSTM-CRF model implementation
+│   ├── 📂 saved_models/       # Saved model weights
+│   ├── 📂 results/            # Training results and metrics
 │   └── 📄 xlm_roberta_improved.py  # Enhanced XLM-RoBERTa model
 ├── 📂 Submissions/            # Submission files
 ├── 📂 Running/                # IPYNB files and main running files
@@ -31,6 +33,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+### 2. Model Weights
+The pre-trained model weights can be downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1Ye8jMhutMpNkB-JPU5LCxYAhUkkoAQ0j). Place the downloaded weights in the `Models/saved_models/` directory. You can download the model which name is `xlm_bs16_lr3e-05_ml128_ep15.pt`.
+
 ## 📊 Data Format
 
 ### Input Format 📥
@@ -42,6 +47,7 @@ The models expect CSV files with the following columns:
 | `language` | Language code |
 | `labels` | BIO tags for training data |
 | `indices` | List of indices where MWEs are located |
+| `tokenized_sentence` | (For training data) List of tokenized words |
 
 ### Output Format 📤
 The models produce a CSV file with:
@@ -59,6 +65,58 @@ The models produce a CSV file with:
 - Conditional Random Fields (CRF) for optimal sequence labeling
 - Layer normalization and configurable dropout
 - Detailed evaluation metrics calculation
+
+#### Training Parameters
+```bash
+python train.py --data_dir dataset --models_dir Models --output_dir Submissions --batch_size 16 --learning_rate 3e-5 --max_length 128 --epochs 15
+```
+
+Optional arguments:
+```
+Path arguments:
+  --data_dir DATA_DIR     Directory containing the datasets (default: dataset)
+  --models_dir MODELS_DIR Directory to save models (default: Models)
+  --output_dir OUTPUT_DIR Directory to save outputs (default: Submissions)
+
+Model parameters:
+  --model_name MODEL_NAME Base model name (default: xlm-roberta-large)
+  --num_labels NUM_LABELS Number of labels for classification (default: 3)
+  --hidden_size HIDDEN_SIZE Size of the LSTM hidden layer (default: 256)
+  --dropout DROPOUT       Dropout rate (default: 0.2)
+
+Training parameters:
+  --batch_size BATCH_SIZE Batch size for training (default: 16)
+  --learning_rate LEARNING_RATE Learning rate (default: 3e-5)
+  --max_length MAX_LENGTH Maximum sequence length (default: 128)
+  --epochs EPOCHS         Number of training epochs (default: 15)
+  --seed SEED             Random seed for reproducibility (default: 42)
+  --weight_decay WEIGHT_DECAY Weight decay for AdamW optimizer (default: 0.01)
+  --warmup_ratio WARMUP_RATIO Ratio of warmup steps (default: 0.1)
+  --patience PATIENCE     Patience for early stopping (default: 2)
+  --max_grad_norm MAX_GRAD_NORM Maximum gradient norm for clipping (default: 1.0)
+  --cpu                   Use CPU even if CUDA is available
+  --experiment_name EXPERIMENT_NAME Custom name for the experiment
+```
+
+#### Inference
+```bash
+python run.py --model_path Models/saved_models/MODEL_NAME.pt --input_file dataset/test_w_o_labels.csv --output_file Submissions/predictions.csv
+```
+
+Required arguments:
+```
+--model_path MODEL_PATH   Path to the trained model weights
+--input_file INPUT_FILE   Path to the input test file (CSV format)
+--output_file OUTPUT_FILE Path to save predictions (CSV format)
+```
+
+Optional arguments:
+```
+--model_name MODEL_NAME   Base model name to use (default: xlm-roberta-large)
+--num_labels NUM_LABELS   Number of labels for classification (default: 3)
+--seed SEED               Random seed for reproducibility (default: 42)
+--device {cuda,cpu}       Device to run on (default: auto-detect)
+```
 
 ### 2. 🔄 Transformer MLM Model
 - Transformer-based architecture with Masked Language Modeling
@@ -166,6 +224,9 @@ The code includes:
 - 🔍 Deterministic operations where possible
 - 📦 Version-controlled dependencies
 - 🔄 Consistent data preprocessing
+- CUDA operations are set to be deterministic (may impact performance)
+- For exact reproducibility across runs, use the `--seed` parameter with the same value
+- When running on the same hardware with the same dependencies and seeds, results should be consistent
 
 ## 📚 External Resources
 
