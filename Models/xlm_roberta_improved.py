@@ -1,8 +1,7 @@
 import torch
 from torchcrf import CRF
 import torch.nn as nn
-from transformers import XLMRobertaModel, XLMRobertaTokenizer
-from sklearn.metrics import classification_report, accuracy_score, f1_score
+from transformers import XLMRobertaModel
 import numpy as np
 from tqdm import tqdm
 
@@ -11,10 +10,9 @@ class XLMRobertaForIdiomDetection(nn.Module):
     def __init__(self, model_name="xlm-roberta-large", num_labels=3):  # 3 labels: O, B-IDIOM, I-IDIOM
         super(XLMRobertaForIdiomDetection, self).__init__()
         
-        # Pre-trained XLM-RoBERTa model
         self.roberta = XLMRobertaModel.from_pretrained(model_name)
         
-        # Add a BiLSTM layer to capture context
+        # It is added a BiLSTM layer to capture context information for longrange informations
         self.lstm = nn.LSTM(
             input_size=self.roberta.config.hidden_size,
             hidden_size=256,
@@ -33,37 +31,15 @@ class XLMRobertaForIdiomDetection(nn.Module):
         
         # CRF layer
         self.crf = CRF(num_labels, batch_first=True)
-
-    # Add this method to your XLMRobertaForIdiomDetection class
-    def increase_dropout(self, dropout_rate=0.3):
-        """Increase dropout rate in all applicable layers"""
-        self.dropout = nn.Dropout(dropout_rate)
-        # Modify LSTM dropout if it exists
-        if hasattr(self, 'lstm'):
-            # Save original hidden size and bidirectional settings
-            hidden_size = self.lstm.hidden_size
-            bidirectional = self.lstm.bidirectional
-            num_layers = self.lstm.num_layers
-            
-            # Recreate LSTM with higher dropout
-            self.lstm = nn.LSTM(
-                input_size=self.roberta.config.hidden_size,
-                hidden_size=hidden_size,
-                num_layers=num_layers,
-                batch_first=True,
-                bidirectional=bidirectional,
-                dropout=dropout_rate
-            )
-        return self
         
     def forward(self, input_ids, attention_mask, labels=None):
-        # Get XLM-RoBERTa outputs
+        # Get xlmroberta outputs
         outputs = self.roberta(
             input_ids=input_ids,
             attention_mask=attention_mask
         )
         
-        # Get token-level representations
+        # Get token level representations
         sequence_output = outputs.last_hidden_state  # [batch_size, seq_len, hidden_size]
         
         # Apply BiLSTM
@@ -85,22 +61,13 @@ class XLMRobertaForIdiomDetection(nn.Module):
             # CRF loss (negative log-likelihood)
             loss = -self.crf(emissions, labels, mask=crf_mask, reduction='mean')
         
-        # CRF decoding for predictions
-        if self.training or labels is None:
-            predictions = self.crf.decode(emissions, mask=attention_mask.bool())
-            # Convert list of lists to tensor with padding
-            max_len = emissions.size(1)
-            pred_tensor = torch.zeros_like(input_ids)
-            for i, pred_seq in enumerate(predictions):
-                pred_tensor[i, :len(pred_seq)] = torch.tensor(pred_seq, device=pred_tensor.device)
-        else:
-            # During evaluation, use CRF decoding
-            predictions = self.crf.decode(emissions, mask=attention_mask.bool())
-            # Convert list of lists to tensor with padding
-            max_len = emissions.size(1)
-            pred_tensor = torch.zeros_like(input_ids)
-            for i, pred_seq in enumerate(predictions):
-                pred_tensor[i, :len(pred_seq)] = torch.tensor(pred_seq, device=pred_tensor.device)
+        # CRF decoding for predictions (remove redundant conditional)
+        predictions = self.crf.decode(emissions, mask=attention_mask.bool())
+
+        # Convert list of lists to tensor with padding
+        pred_tensor = torch.zeros_like(input_ids)
+        for i, pred_seq in enumerate(predictions):
+            pred_tensor[i, :len(pred_seq)] = torch.tensor(pred_seq, device=pred_tensor.device)
         
         return {
             'loss': loss,
@@ -160,7 +127,6 @@ def evaluate(model, val_loader, tokenizer, device):
                     
                     # Handle end of previous idiom
                     if previous_tag in [1, 2] and label.item() not in [1, 2]:
-                        # End of idiom
                         if current_idiom_indices:
                             true_idiom_indices.extend(current_idiom_indices)
                             current_idiom_indices = []
@@ -174,7 +140,7 @@ def evaluate(model, val_loader, tokenizer, device):
                     
                     previous_tag = label.item()
                 
-                # Don't forget last idiom
+                # We don't forget last idiom
                 if current_idiom_indices:
                     true_idiom_indices.extend(current_idiom_indices)
                 
@@ -195,7 +161,6 @@ def evaluate(model, val_loader, tokenizer, device):
                     
                     # Handle end of previous idiom
                     if previous_tag in [1, 2] and pred.item() not in [1, 2]:
-                        # End of idiom
                         if current_idiom_indices:
                             pred_idiom_indices.extend(current_idiom_indices)
                             current_idiom_indices = []
@@ -220,8 +185,10 @@ def evaluate(model, val_loader, tokenizer, device):
     # Calculate metrics
     val_loss = val_loss / total_batches if total_batches > 0 else 0
     
-    # Calculate F1 score using the same logic as in scoring.py
+    # Calculate F1 score like scoring.py file calculation style
     f1_scores = []
+    precision_values = []
+    recall_values = []
     
     for pred, gold in zip(predictions, ground_truth):
         # Special case for ground truth [-1]
@@ -229,8 +196,12 @@ def evaluate(model, val_loader, tokenizer, device):
             # Prediction must also be exactly [-1]
             if pred == [-1]:
                 f1_scores.append(1.0)
+                precision_values.append(1.0)
+                recall_values.append(1.0)
             else:
                 f1_scores.append(0.0)
+                precision_values.append(0.0)
+                recall_values.append(0.0)
         else:
             # Convert indices into sets for comparison
             pred_set = set(pred) if isinstance(pred, list) else set()
@@ -243,22 +214,13 @@ def evaluate(model, val_loader, tokenizer, device):
             f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0
             
             f1_scores.append(f1)
+            precision_values.append(precision)
+            recall_values.append(recall)
     
-    # Compute mean F1 score
+    # Compute mean scores
     f1 = np.mean(f1_scores) if f1_scores else 0
-    
-    # Calculate precision and recall for overall metrics
-    total_predictions = sum(len(set(pred)) for pred in predictions)
-    total_ground_truth = sum(len(set(gold)) for gold in ground_truth)
-    
-    total_correct = 0
-    for pred, gold in zip(predictions, ground_truth):
-        pred_set = set(pred)
-        gold_set = set(gold)
-        total_correct += len(pred_set & gold_set)
-    
-    precision = total_correct / total_predictions if total_predictions > 0 else 0
-    recall = total_correct / total_ground_truth if total_ground_truth > 0 else 0
+    precision = np.mean(precision_values) if precision_values else 0
+    recall = np.mean(recall_values) if recall_values else 0
     
     metrics = {
         'val_loss': val_loss,
@@ -268,101 +230,6 @@ def evaluate(model, val_loader, tokenizer, device):
     }
     
     return metrics
-
-
-
-def train_model(train_loader, val_loader, tokenizer, epochs=10, lr=2e-5):
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
-    # Set seeds for reproducibility
-    import random
-    import numpy as np
-    random.seed(42)
-    np.random.seed(42)
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-    
-    model = XLMRobertaForIdiomDetection()
-    
-    # Increase dropout in the model
-    model.dropout = nn.Dropout(0.2)  # Increased from default 0.2
-    
-    model.to(device)
-    
-    # Optimizer with weight decay (L2 regularization)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
-    
-    # Learning rate scheduler with warmup
-    total_steps = len(train_loader) * epochs
-    from transformers import get_scheduler
-    scheduler = get_scheduler(
-        "linear",
-        optimizer=optimizer,
-        num_warmup_steps=int(0.1 * total_steps),  # 10% warmup
-        num_training_steps=total_steps
-    )
-    
-    best_f1 = 0.0
-    patience = 3  # For early stopping
-    no_improvement = 0
-    
-    for epoch in range(epochs):
-        # Training
-        model.train()
-        train_loss = 0.0
-        train_batches = 0
-        
-        progress_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{epochs} [Training]")
-        for batch in progress_bar:
-            if batch['input_ids'].size(0) == 0:
-                continue
-                
-            train_batches += 1
-            optimizer.zero_grad()
-            
-            input_ids = batch['input_ids'].to(device)
-            attention_mask = batch['attention_mask'].to(device)
-            labels = batch['labels'].to(device)
-            
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                labels=labels
-            )
-            
-            loss = outputs['loss']
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-            scheduler.step()
-            
-            train_loss += loss.item()
-            progress_bar.set_postfix({"loss": f"{loss.item():.4f}"})
-        
-        avg_train_loss = train_loss / train_batches if train_batches > 0 else 0
-        print(f"Average training loss: {avg_train_loss:.4f}")
-        
-        # Validation
-        metrics = evaluate(model, val_loader, tokenizer, device)
-        print(f"Validation loss: {metrics['val_loss']:.4f}")
-        print(f"F1 Score: {metrics['f1']:.4f}")
-        
-        if metrics['f1'] > best_f1:
-            best_f1 = metrics['f1']
-            torch.save(model.state_dict(), 'best_xlm_roberta_idiom_model.pt')
-            print(f"New best model saved with F1: {best_f1:.4f}")
-            no_improvement = 0  # Reset counter
-        else:
-            no_improvement += 1
-            print(f"No improvement for {no_improvement} epochs")
-            
-            # Early stopping
-            if no_improvement >= patience:
-                print(f"Early stopping triggered after {epoch+1} epochs")
-                break
-    
-    return model
 
 
 def predict_idioms(model, tokenizer, sentence, device):
@@ -385,9 +252,7 @@ def predict_idioms(model, tokenizer, sentence, device):
             input_ids=input_ids,
             attention_mask=attention_mask
         )
-        
-    preds = outputs['predictions'][0].tolist()  # Get predictions for the single sentence
-    
+
     # Map predictions back to words
     tokens = tokenizer.convert_ids_to_tokens(input_ids[0])
     
@@ -425,18 +290,3 @@ def predict_idioms(model, tokenizer, sentence, device):
         idiom_indices.extend(current_idiom_indices)
     
     return sentence, idiom_indices
-
-
-def debug_predictions(model, tokenizer, test_sentences, device):
-    for sentence in test_sentences:
-        processed_sentence, idiom_indices = predict_idioms(model, tokenizer, sentence, device)
-        
-        print("\nSentence:", sentence)
-        print("Detected Idiom Indices:", idiom_indices)
-        
-        if idiom_indices:
-            words = sentence.split()
-            idiom_words = [words[idx] for idx in idiom_indices]
-            print("Idiom Words:", " ".join(idiom_words))
-        else:
-            print("No idiom detected.")
