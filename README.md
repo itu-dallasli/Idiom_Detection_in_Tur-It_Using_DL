@@ -1,6 +1,6 @@
 # Idiom Detection Project
 
-This repository contains a machine learning project focused on idiom detection in multiple languages, specifically Turkish and Italian. The project uses advanced NLP techniques and transformer-based models to identify idioms in text.
+This repository contains a machine learning and deep learning hybrid project focused on idiom detection in multiple languages, specifically Turkish and Italian. The project uses advanced NLP techniques and transformer-based models to identify idioms in text.
 
 ## Project Structure
 
