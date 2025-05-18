@@ -9,8 +9,8 @@ This repository contains a machine learning and deep learning hybrid project foc
 ├── 📂 Config/                 # Configuration files
 ├── 📂 Dataset/                # Dataset files
 ├── 📂 Models/                 # Model implementations and saved models
-│   ├── 📂 Transformer_MLM/    # Transformer with Masked Language Modeling
-│   ├── 📂 latest_bilstm_crf/  # BiLSTM-CRF model implementation
+│   ├── 📂 Transformer/    # Transformer
+│   ├── 📂 Latest_BiLSTM-CRF/  # BiLSTM-CRF model implementation
 │   └── 📄 xlm_roberta_improved.py  # Enhanced XLM-RoBERTa model
 ├── 📂 Submissions/            # Submission files
 ├── 📂 Running/                # IPYNB files and main running files
