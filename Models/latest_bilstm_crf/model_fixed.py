@@ -1,19 +1,3 @@
-
-"""Enhanced BERT‑based sequence‑labelling model for Multi‑Word Expression
-detection.
-
-Key improvements over the original version:
-* Proper BIOES tag support (num_labels must match your tag set)
-* Optional BiLSTM layer between BERT and CRF
-* Optional POS / morphology embedding concatenated to token features
-* CRF decoding with masking over attention_mask
-* Focal loss fallback if you disable the CRF
-* Easy freezing of the first *N* encoder layers.
-
-Compatible with HuggingFace Trainer as long as you return a dict with
-`loss`, `logits` (decoded tag indices), and `hidden_states` (optional).
-"""
-
 from typing import Optional, List
 
 import torch

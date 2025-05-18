@@ -38,22 +38,16 @@ def decode_indices(sentence_words, predicted_tags, tokenizer):
     else:
         return sorted(list(mwes))
 
-def build_argparser():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--model_dir", required=True)
-    ap.add_argument("--test_csv", required=True)
-    ap.add_argument("--output_csv", required=True)
-    return ap
+
 
 def main():
-    args = build_argparser().parse_args()
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load model + tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(args.model_dir)
+    tokenizer = AutoTokenizer.from_pretrained('bert-base-multilingual-cased')
     model = EnhancedBertForIdiomDetection.from_pretrained(
-        args.model_dir,
-        model_name_or_path=args.model_dir,
+        'bert-base-multilingual-cased',
+        model_name_or_path='bert-base-multilingual-cased',
         num_labels=3,
         use_bilstm=True,
         use_crf=True,
@@ -61,7 +55,7 @@ def main():
     model.eval()
 
     # Raw test DF is needed for IDs, language, and original words
-    test_df = pd.read_csv(args.test_csv)
+    test_df = pd.read_csv("dataset/test_w_o_labels.csv")
     sentences, labels_dummy = preprocess_dataframe(test_df)
     dataset = IdiomDataset(sentences, labels_dummy, tokenizer)
 
@@ -88,8 +82,8 @@ def main():
                 "language": test_df.loc[i, "language"]
             })
 
-    pd.DataFrame(predictions).to_csv(args.output_csv, index=False)
-    print("Saved", args.output_csv)
+    pd.DataFrame(predictions).to_csv("prediction.csv", index=False)
+    print("Saved")
 
 if __name__ == "__main__":
     main()
