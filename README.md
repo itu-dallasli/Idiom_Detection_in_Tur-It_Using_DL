@@ -11,8 +11,7 @@ This repository contains a machine learning and deep learning hybrid project foc
 ├── 📂 Models/                 # Model implementations and saved models
 │   ├── 📂 Transformer/    # Transformer
 │   ├── 📂 Latest_BiLSTM-CRF/  # BiLSTM-CRF model implementation
-│   ├── 📂 saved_models/       # Saved model weights
-│   ├── 📂 results/            # Training results and metrics
+│   ├── 📂 Roberta/       # Roberta model implementation
 │   └── 📄 xlm_roberta_improved.py  # Enhanced XLM-RoBERTa model
 ├── 📂 Submissions/            # Submission files
 ├── 📂 Running/                # IPYNB files and main running files
