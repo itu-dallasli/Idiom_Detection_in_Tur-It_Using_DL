@@ -33,7 +33,7 @@ pip install -r requirements.txt
 ```
 
 ### 2. Model Weights
-The pre-trained model weights can be downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1Ye8jMhutMpNkB-JPU5LCxYAhUkkoAQ0j). Place the downloaded weights in the `Models/saved_models/` directory. You can download the model which name is `xlm_bs16_lr3e-05_ml128_ep15.pt`.
+The pre-trained model weights can be downloaded from [Google Drive](https://drive.google.com/drive/u/0/folders/1Ye8jMhutMpNkB-JPU5LCxYAhUkkoAQ0j). Place the downloaded weights in the `Models/saved_models/` directory. You can download the model which name is `xlm_bs16_lr3e-05_ml128_ep5.pt`.
 
 ## 📊 Data Format
 
@@ -67,7 +67,7 @@ The models produce a CSV file with:
 
 #### Training Parameters
 ```bash
-python train.py --data_dir dataset --models_dir Models --output_dir Submissions --batch_size 16 --learning_rate 3e-5 --max_length 128 --epochs 15
+python train.py --data_dir dataset --models_dir Models --output_dir Submissions --batch_size 16 --learning_rate 3e-5 --max_length 128 --epochs 5
 ```
 
 Optional arguments:
