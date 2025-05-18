@@ -1,42 +1,63 @@
 import torch
 import pandas as pd
 from transformers import AutoTokenizer
-from model_from_scratch import MWEAttentionModel, predict_mwe
+import argparse
+import os
+import json
+from model_prime import MWEMaskedAttentionModel, predict_mwe
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Make predictions using trained MWE detection model')
+    parser.add_argument('--input_path', type=str, required=True, help='Path to input data CSV')
+    parser.add_argument('--model_path', type=str, required=True, help='Path to trained model weights')
+    parser.add_argument('--output_path', type=str, required=True, help='Path to save predictions')
+    parser.add_argument('--config_path', type=str, help='Path to model configuration JSON')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for inference')
+    parser.add_argument('--max_length', type=int, default=128, help='Maximum sequence length')
+    return parser.parse_args()
 
 def main():
-    # Model parameters (should match training parameters)
-    model_name = 'xlm-roberta-base'
-    hidden_size = 768
-    num_attention_heads = 8
-    attention_dropout = 0.1
-    hidden_dropout = 0.3
+    args = parse_args()
     
     # Initialize device
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # Load model configuration
+    if args.config_path:
+        with open(args.config_path, 'r') as f:
+            config = json.load(f)
+    else:
+        config = {
+            'model_name': 'xlm-roberta-base',
+            'hidden_size': 768,
+            'num_attention_heads': 8,
+            'attention_dropout': 0.1,
+            'hidden_dropout': 0.3
+        }
+    
     # Initialize tokenizer
     print("Initializing tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(config['model_name'])
     
     # Initialize model
     print("Loading model...")
-    model = MWEAttentionModel(
-        model_name=model_name,
+    model = MWEMaskedAttentionModel(
+        model_name=config['model_name'],
         num_labels=3,  # O, B-IDIOM, I-IDIOM
-        hidden_size=hidden_size,
-        num_attention_heads=num_attention_heads,
-        attention_dropout=attention_dropout,
-        hidden_dropout=hidden_dropout
+        hidden_size=config['hidden_size'],
+        num_attention_heads=config['num_attention_heads'],
+        attention_dropout=config['attention_dropout'],
+        hidden_dropout=config['hidden_dropout']
     )
     
     # Load trained weights
-    model.load_state_dict(torch.load("best_mwe_model.pt"))
+    model.load_state_dict(torch.load(args.model_path, map_location=device))
     model = model.to(device)
     model.eval()
     
     # Load evaluation data
     print("Loading evaluation data...")
-    eval_df = pd.read_csv("dataset/eval.csv")
+    eval_df = pd.read_csv(args.input_path)
     
     # Prepare results
     results = []
@@ -51,7 +72,7 @@ def main():
         language = row["language"]
         
         # Get predictions
-        words, labels = predict_mwe(model, tokenizer, sentence, device)
+        words, labels = predict_mwe(model, tokenizer, sentence, device, args.max_length)
         
         # Debug print for first few sentences
         if idx < 5:
@@ -107,9 +128,12 @@ def main():
     print(f"Sentences without MWEs: {total_no_mwes}")
     print(f"Percentage of sentences with MWEs: {(total_mwes/total_sentences)*100:.2f}%")
     
+    # Create output directory if it doesn't exist
+    os.makedirs(os.path.dirname(args.output_path), exist_ok=True)
+    
     # Save predictions
-    print("\nSaving predictions to prediction.csv...")
-    prediction_df.to_csv("prediction.csv", index=False)
+    print(f"\nSaving predictions to {args.output_path}...")
+    prediction_df.to_csv(args.output_path, index=False)
     print("Predictions saved successfully!")
 
 if __name__ == "__main__":

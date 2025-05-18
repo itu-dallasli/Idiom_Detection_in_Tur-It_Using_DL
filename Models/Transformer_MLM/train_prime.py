@@ -1,9 +1,35 @@
 import torch
 from transformers import AutoTokenizer
-from dataset.dataset import get_dataloaders
-from model_from_scratch import MWEMaskedAttentionModel, train_model
 import pandas as pd
 import numpy as np
+import argparse
+import os
+import random
+import json
+from model_prime import MWEMaskedAttentionModel, train_model, get_dataloaders
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+def parse_args():
+    parser = argparse.ArgumentParser(description='Train MWE detection model')
+    parser.add_argument('--train_path', type=str, required=True, help='Path to training data CSV')
+    parser.add_argument('--val_path', type=str, required=True, help='Path to validation data CSV')
+    parser.add_argument('--output_dir', type=str, required=True, help='Directory to save model and logs')
+    parser.add_argument('--batch_size', type=int, default=16, help='Batch size for training')
+    parser.add_argument('--max_length', type=int, default=128, help='Maximum sequence length')
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
+    parser.add_argument('--learning_rate', type=float, default=1e-5, help='Learning rate')
+    parser.add_argument('--weight_decay', type=float, default=0.01, help='Weight decay')
+    parser.add_argument('--seed', type=int, default=42, help='Random seed for reproducibility')
+    parser.add_argument('--model_name', type=str, default='xlm-roberta-base', help='Pretrained model name')
+    return parser.parse_args()
 
 def analyze_predictions(model, val_loader, tokenizer, device):
     model.eval()
@@ -73,45 +99,30 @@ def analyze_predictions(model, val_loader, tokenizer, device):
     print(f"Percentage of sentences with actual MWEs: {(sum(1 for l in all_labels if any(x in [1,2] for x in l))/total_sentences)*100:.2f}%")
 
 def main():
-    # Data parameters
-    train_path = 'dataset/train.csv'
-    val_path = 'dataset/eval.csv'
-    batch_size = 16
-    max_length = 128
+    args = parse_args()
     
-    # Training parameters
-    epochs = 10
-    learning_rate = 1e-5  # Reduced learning rate
-    weight_decay = 0.01
-    lr_multiplier = 5  # Reduced multiplier
-    patience = 3
+    # Set random seed for reproducibility
+    set_seed(args.seed)
     
-    # Model parameters
-    model_name = 'xlm-roberta-base'
-    hidden_size = 768
-    num_attention_heads = 8
-    attention_dropout = 0.2  # Increased dropout
-    hidden_dropout = 0.4  # Increased dropout
-    freeze_bert_layers = 6  # Freeze first 6 layers
-    mlm_probability = 0.15  # MLM masking probability
-    
+    # Create output directory if it doesn't exist
+    os.makedirs(args.output_dir, exist_ok=True)
     
     # Initialize tokenizer
     print("Initializing tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     
     # Get dataloaders
     print("Loading data...")
     train_loader, val_loader, _ = get_dataloaders(
-        train_path=train_path,
-        val_path=val_path,
-        batch_size=batch_size,
-        max_length=max_length
+        train_path=args.train_path,
+        val_path=args.val_path,
+        batch_size=args.batch_size,
+        max_length=args.max_length
     )
     
     # Print dataset statistics
-    train_df = pd.read_csv(train_path)
-    val_df = pd.read_csv(val_path)
+    train_df = pd.read_csv(args.train_path)
+    val_df = pd.read_csv(args.val_path)
     
     print("\nDataset Statistics:")
     print(f"Training set size: {len(train_df)}")
@@ -129,14 +140,14 @@ def main():
     # Initialize model
     print("\nInitializing model...")
     model = MWEMaskedAttentionModel(
-        model_name=model_name,
+        model_name=args.model_name,
         num_labels=3,  # O, B-IDIOM, I-IDIOM
-        hidden_size=hidden_size,
-        num_attention_heads=num_attention_heads,
-        attention_dropout=attention_dropout,
-        hidden_dropout=hidden_dropout,
-        freeze_bert_layers=freeze_bert_layers,
-        mlm_probability=mlm_probability
+        hidden_size=768,
+        num_attention_heads=8,
+        attention_dropout=0.2,
+        hidden_dropout=0.4,
+        freeze_bert_layers=6,
+        mlm_probability=0.15
     )
     
     # Train model
@@ -146,12 +157,24 @@ def main():
         train_loader=train_loader,
         val_loader=val_loader,
         tokenizer=tokenizer,
-        epochs=epochs,
-        lr=learning_rate,
-        weight_decay=weight_decay,
-        lr_multiplier=lr_multiplier,
-        patience=patience
+        epochs=args.epochs,
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+        lr_multiplier=5,
+        patience=3
     )
+    
+    # Save final model
+    model_path = os.path.join(args.output_dir, "final_model.pt")
+    torch.save(model.state_dict(), model_path)
+    print(f"\nFinal model saved to {model_path}")
+    
+    # Save training configuration
+    config = vars(args)
+    config_path = os.path.join(args.output_dir, "training_config.json")
+    with open(config_path, 'w') as f:
+        json.dump(config, f, indent=4)
+    print(f"Training configuration saved to {config_path}")
     
     # Analyze validation predictions
     print("\nAnalyzing validation predictions...")
