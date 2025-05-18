@@ -1,0 +1,16 @@
+[MODEL]
+model_name = xlm-roberta-large
+num_labels = 3
+hidden_size = 256
+lstm_layers = 2
+dropout = 0.2
+bidirectional = True
+
+[TRAINING]
+batch_size = 16
+learning_rate = 3e-05
+max_length = 128
+epochs = 15
+warmup_ratio = 0.1
+early_stopping_patience = 2
+weight_decay = 0.01
