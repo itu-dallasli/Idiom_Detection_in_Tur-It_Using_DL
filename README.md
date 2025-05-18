@@ -7,17 +7,20 @@ This repository contains a machine learning and deep learning hybrid project foc
 ```
 .
 ├── Config/                 # Configuration files
-├── Dataset/               # Dataset files
-├── Models/                # Model implementations and saved models
-├── Submissions/           # Submission files
-├── Running/            # IPYNB files and main running files
-└── requirements.txt      # Project dependencies
+├── Dataset/                # Dataset files
+├── Models/                 # Model implementations and saved models
+├── Submissions/            # Submission files
+├── Running/                # IPYNB files and main running files
+└── requirements.txt        # Project dependencies
 ```
 
 ## Features
 
 - Multi-language support (Turkish and Italian)
-- BERT-based model architecture
+- Multiple model implementations:
+  - XLM-RoBERTa with BiLSTM and CRF 
+  - BERT-based model architecture
+
 - LSTM enhancement for better sequence understanding
 - Hyperparameter optimization framework
 - Support for both training and inference
@@ -41,9 +44,9 @@ pip install -r requirements.txt
 ### Training
 
 1. Create an "ipynb" file with respect to a model that you wish to use. Use training, evaluation, prediction functions and run them consequently.
-2. "Running/" folder contains an example ipynb file to show how to use the models.  
+2. "Running/" folder contains example ipynb files to show how to use the models:  
 ```bash
-jupyter notebook xlm_main.ipynb
+jupyter notebook xlm_earlystop_main.ipynb    # For XLM-RoBERTa model
 ```
 
 ### Evaluation
@@ -53,9 +56,18 @@ Use the scoring script to evaluate model predictions:
 python scoring.py
 ```
 
-## Model Architecture
+## Model Architectures
 
-The project uses an enhanced BERT-based model with the following features:
+### XLM-RoBERTa Model
+The project includes an XLM-RoBERTa-based model with the following features:
+- Pre-trained XLM-RoBERTa large model
+- BiLSTM layers for capturing long-range context information
+- Conditional Random Fields (CRF) for optimal sequence labeling
+- Layer normalization and configurable dropout
+- Detailed evaluation metrics calculation
+
+### BERT-based Model
+The project also includes an enhanced BERT-based model with the following features:
 - Multi-lingual BERT base model
 - LSTM layers for improved sequence understanding
 - Layer normalization options
